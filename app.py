@@ -9,6 +9,8 @@ import logging
 import traceback
 import re
 from werkzeug.utils import secure_filename
+from pathlib import Path
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -20,10 +22,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create temporary directories for processing
-TEMP_DIR = tempfile.mkdtemp()
-OUTPUT_DIR = os.path.join(TEMP_DIR, 'output')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Modify the temporary directory setup to use a persistent storage path
+if os.environ.get('RENDER'):
+    # Use Render's persistent storage
+    TEMP_DIR = '/data/temp'
+    OUTPUT_DIR = '/data/output'
+else:
+    # Local development paths
+    TEMP_DIR = tempfile.mkdtemp()
+    OUTPUT_DIR = os.path.join(TEMP_DIR, 'output')
+
+# Create directories if they don't exist
+Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Temporary directory created at: {TEMP_DIR}")
 logger.info(f"Output directory created at: {OUTPUT_DIR}")
@@ -215,8 +226,23 @@ def process_youtube_audio(url, effect_type='slow_reverb'):
             os.remove(download_path + '.mp3')
         raise ValueError("An unexpected error occurred while processing the video")
 
+# Add this function to clean up old files
+def cleanup_old_files():
+    """Clean up files older than 1 hour"""
+    try:
+        current_time = time.time()
+        for dir_path in [TEMP_DIR, OUTPUT_DIR]:
+            for file in os.listdir(dir_path):
+                file_path = os.path.join(dir_path, file)
+                if os.path.isfile(file_path):
+                    if current_time - os.path.getmtime(file_path) > 3600:  # 1 hour
+                        os.remove(file_path)
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}")
+
 @app.route('/api/transform', methods=['POST'])
 def transform_audio():
+    cleanup_old_files()  # Clean up before processing new request
     try:
         data = request.get_json()
         logger.info(f"Received request data: {data}")
@@ -259,4 +285,5 @@ def health_check():
     return jsonify({'status': 'healthy'}), 200
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5005)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
